@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 import { readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { simpleGit } from 'simple-git';
+import { GitPluginError, SimpleGit, simpleGit } from 'simple-git';
 import { Command } from '@commander-js/extra-typings';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
+import libre from 'libreoffice-convert';
+const convertAsync = require('util').promisify(libre.convert);
 
 const monthMap: Record<string, { prev: string, next: string, days: number, num: string }> = {
   'jan': { prev: 'dec', next: 'feb', days: 31, num: '1' },
@@ -38,6 +40,8 @@ const fullMonthMap: Record<string, string> = {
 const program = new Command()
   .requiredOption('-m, --month <month>', 'Month to display logs for')
   .requiredOption('--author <author>', 'Author to display logs for')
+  .option('--pdf', 'Output as PDF')
+  .option('--fetch', 'Fetch all remote work before generating logs')
   .parse(process.argv);
 
 const options = program.opts();
@@ -66,9 +70,15 @@ if (options && options.month && options.author) {
 
   const projectLogs = await Promise.all(dirs.sort().map(async (dir) => {
     const baseDir = path.join(cwd, dir);
-    const git = simpleGit({ baseDir });
+    const git = simpleGit({ 
+      baseDir,
+      timeout: {
+        block: 20000,
+      }
+    });
 
     if (await git.checkIsRepo()) {
+      options.fetch && await pullAllBranches(git, baseDir);
       const { all } = await git.log({
         '--all': null,
         '--author': author,
@@ -132,7 +142,68 @@ if (options && options.month && options.author) {
     ],
   });
 
-  const output = await Packer.toBuffer(doc);
-  await writeFile('commit-log.docx', output);
+  let output = await Packer.toBuffer(doc);
+  if (options.pdf) {
+    output = await convertAsync(output, '.pdf', undefined);
+    await writeFile('commit-log.pdf', output);
+  } else {
+    await writeFile('commit-log.docx', output);
+  }
   console.log('done!');
+  process.exit(0);
 }
+
+async function pullAllBranches(git: SimpleGit, baseDir: string) {
+
+  // Fetch all remote branches
+  try {
+    await git.fetch(['--all']);
+  } catch (err) {
+    if (err instanceof GitPluginError && err.plugin === 'timeout') {
+        console.log('Timeout error occurred while fetching remote branches for', baseDir);
+    }
+  }
+
+  // Get list of all branches
+  const branchSummary = await git.branch(['-r']);
+  const branches = branchSummary.all;
+
+  for (const branch of branches) {
+    // Skip the remote HEAD branch
+    if (branch.includes('HEAD')) continue;
+
+    // Extract branch name
+    const remoteBranchName = branch.trim();
+    const localBranchName = remoteBranchName.replace('origin/', '');
+
+    // Check if the remote reference exists
+    try {
+      const remoteBranchExists = await git.raw(['ls-remote', '--heads', 'origin', localBranchName]);
+      if (remoteBranchExists) {
+      // Checkout the branch locally
+      await git.checkout(localBranchName).catch(async (error) => {
+        // Create and checkout if the branch does not exist locally
+        if (error.message.includes('did not match any file(s) known to git')) {
+          await git.checkout(['-b', localBranchName, remoteBranchName]);
+        } else {
+          throw error;
+        }
+      });
+
+      // Pull the latest changes for the branch
+      await git.pull('origin', localBranchName);
+    } else {
+      console.log(`Remote branch ${localBranchName} does not exist.`);
+    }
+    } catch (err) {
+      if (err instanceof GitPluginError && err.plugin === 'timeout') {
+          console.log('Timeout error occurred while checking if remote branch exists for', baseDir);
+      }
+    }
+
+    
+  }
+
+  console.log('All remote branches have been pulled.');
+}
+
