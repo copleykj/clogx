@@ -1,10 +1,17 @@
 #!/usr/bin/env bun
-import { readdir, writeFile } from "node:fs/promises";
+import { readdir, writeFile, readFile, exists } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { GitPluginError, SimpleGit, simpleGit } from 'simple-git';
 import { Command } from '@commander-js/extra-typings';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
 import libre from 'libreoffice-convert';
+import {WakaTime} from "fozziejs";
+import { parse, stringify } from 'ini';
+import inquirer from 'inquirer';
+
+let wakaTime: WakaTime;
+
 const convertAsync = require('util').promisify(libre.convert);
 
 const monthMap: Record<string, { prev: string, next: string, days: number, num: string }> = {
@@ -42,6 +49,7 @@ const program = new Command()
   .requiredOption('--author <author>', 'Author to display logs for')
   .option('--pdf', 'Output as PDF')
   .option('--fetch', 'Fetch all remote work before generating logs')
+  .option('--waka', 'Fetch time for each project from wakatime')
   .parse(process.argv);
 
 const options = program.opts();
@@ -73,7 +81,7 @@ if (options && options.month && options.author) {
     const git = simpleGit({ 
       baseDir,
       timeout: {
-        block: 20000,
+        block: 5000,
       }
     });
 
@@ -106,6 +114,19 @@ if (options && options.month && options.author) {
         children.push(new TextRun({ break: 1 }));
         return new Paragraph({ children });
       });
+
+      if (options.waka) {
+        const projectTime = await getCumTimeForProject(dir, after, until);
+        projectCommits.unshift(new Paragraph({
+          children: [
+            new TextRun({
+              text: `Time in editor: ${projectTime}`,
+              bold: true,
+            }),
+            new TextRun({ break: 1 }),
+          ],
+        }));
+      }
 
       return [
         new Paragraph({
@@ -207,3 +228,42 @@ async function pullAllBranches(git: SimpleGit, baseDir: string) {
   console.log('All remote branches have been pulled.');
 }
 
+async function initWakaTime () {
+  if (wakaTime) return wakaTime;
+
+  const configLocation = `${homedir()}/.wakatime.cfg`;
+  const configExists = await exists(configLocation);
+  if (configExists) {
+    const wakaIni = await readFile(configLocation);
+    const wakaConfig = parse(wakaIni.toString());
+    wakaTime = new WakaTime(wakaConfig.settings.api_key);
+    return wakaTime;
+  } else {
+    // use inquirer to ask user for wakatime api key
+    const { apiKey } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'apiKey',
+        message: 'Enter your WakaTime API key',
+      },
+    ]);
+    const wakaConfig = {
+      settings: {
+        api_key: apiKey,
+      },
+    };
+    const wakaIni = stringify(wakaConfig);
+    await writeFile(configLocation, wakaIni);
+    console.log(`WakaTime API key saved to ${configLocation}. Other applications such as VSCode will use the key from this file as well.`);
+    wakaTime = new WakaTime(apiKey);
+
+    return wakaTime;
+  }
+  
+}
+
+async function getCumTimeForProject (project: string, after: string, until: string) {
+  const wakaTime = await initWakaTime();
+  const projectSummary = await wakaTime.getSummaries({ start: after, end: until, project });
+  return projectSummary.cumulative_total.text;
+}
