@@ -3,6 +3,12 @@
   "version": "1.1.0",
   "module": "index.ts",
   "type": "module",
+  "description": "A simple CLI tool to generate a per repo commit log of all directories in the current working directory for submission as proof of work completed. Handy if you are a freelancer who needs to provide documentation to clients.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/copleykj/clogx.git"
+  },
+  "homepage": "https://github.com/copleykj/clogx/blob/main/README.md",
   "bin": {
     "clogx": "index.ts"
   },
