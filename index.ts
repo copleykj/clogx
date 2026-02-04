@@ -6,9 +6,11 @@ import { GitPluginError, SimpleGit, simpleGit } from 'simple-git';
 import { Command } from '@commander-js/extra-typings';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
 import libre from 'libreoffice-convert';
-import {WakaTime} from "fozziejs";
+import { WakaTime } from "fozziejs";
 import { parse, stringify } from 'ini';
 import inquirer from 'inquirer';
+import { format, subMonths, lastDayOfMonth
+} from "date-fns";
 
 let wakaTime: WakaTime;
 
@@ -44,17 +46,18 @@ const fullMonthMap: Record<string, string> = {
   'december': 'dec',
 };
 
-const program = new Command()
+const program = new Command('clogx')
   .requiredOption('-m, --month <month>', 'Month to display logs for')
-  .requiredOption('--author <author>', 'Author to display logs for')
+  .option('-y, --year <year>', 'Year to display logs for')
+  .option('--author <author>', 'Author to display logs for')
   .option('--pdf', 'Output as PDF')
   .option('--fetch', 'Fetch all remote work before generating logs')
   .option('--waka', 'Fetch time for each project from wakatime')
   .parse(process.argv);
 
 const options = program.opts();
-if (options && options.month && options.author) {
-  const year = new Date().getFullYear();
+if (options && options.month) {
+  const year = options.year || new Date().getFullYear();
   const month = options.month.toLowerCase();
   const author = options.author;
 
@@ -67,18 +70,29 @@ if (options && options.month && options.author) {
     process.exit(1);
   }
 
-  const prevMonthOptions = monthMap[monthOptions.prev];
+  // const prevMonthOptions = monthMap[monthOptions.prev];
 
-  const after = `${year}-${prevMonthOptions.num}-${prevMonthOptions.days}`;
-  const until = `${year}-${monthOptions.num}-${monthOptions.days}`;
+  // const after = `${year}-${prevMonthOptions.num}-${prevMonthOptions.days}`;
+  const until = format(lastDayOfMonth(`${year}-${monthOptions.num}-01`), 'yyyy-MM-dd');
+  const after = format(lastDayOfMonth(subMonths(until, 1)), 'yyyy-MM-dd');
 
   const cwd = process.cwd();
   const files = await readdir(cwd, { withFileTypes: true });
   const dirs = files.filter(file => file.isDirectory()).map(file => file.name);
 
+  const gitLogOptions = {
+    '--all': null,
+    ...(author ? {'--author': author} : {}),
+    '--after': after,
+    '--until': until,
+    '--stat': null,
+    'format': 'oneline',
+    '-P': null,
+  }
+  console.log(Object.entries(gitLogOptions).map(([key, value]) => value ? `${key}=${value}` : key).join(' '));
   const projectLogs = await Promise.all(dirs.sort().map(async (dir) => {
     const baseDir = path.join(cwd, dir);
-    const git = simpleGit({ 
+    const git = simpleGit({
       baseDir,
       timeout: {
         block: 5000,
@@ -87,15 +101,8 @@ if (options && options.month && options.author) {
 
     if (await git.checkIsRepo()) {
       options.fetch && await pullAllBranches(git, baseDir);
-      const { all } = await git.log({
-        '--all': null,
-        '--author': author,
-        '--after': after,
-        '--until': until,
-        '--stat': null,
-        'format': 'oneline',
-        '-P': null,
-      });
+      const { all, total } = await git.log(gitLogOptions);
+      console.log(`Found ${total} commits for ${dir}`);
       if (!all.length) return;
       const projectCommits = all.map(commit => {
         const children = [];
@@ -181,7 +188,7 @@ async function pullAllBranches(git: SimpleGit, baseDir: string) {
     await git.fetch(['--all']);
   } catch (err) {
     if (err instanceof GitPluginError && err.plugin === 'timeout') {
-        console.log('Timeout error occurred while fetching remote branches for', baseDir);
+      console.log('Timeout error occurred while fetching remote branches for', baseDir);
     }
   }
 
@@ -201,34 +208,34 @@ async function pullAllBranches(git: SimpleGit, baseDir: string) {
     try {
       const remoteBranchExists = await git.raw(['ls-remote', '--heads', 'origin', localBranchName]);
       if (remoteBranchExists) {
-      // Checkout the branch locally
-      await git.checkout(localBranchName).catch(async (error) => {
-        // Create and checkout if the branch does not exist locally
-        if (error.message.includes('did not match any file(s) known to git')) {
-          await git.checkout(['-b', localBranchName, remoteBranchName]);
-        } else {
-          throw error;
-        }
-      });
+        // Checkout the branch locally
+        await git.checkout(localBranchName).catch(async (error) => {
+          // Create and checkout if the branch does not exist locally
+          if (error.message.includes('did not match any file(s) known to git')) {
+            await git.checkout(['-b', localBranchName, remoteBranchName]);
+          } else {
+            throw error;
+          }
+        });
 
-      // Pull the latest changes for the branch
-      await git.pull('origin', localBranchName);
-    } else {
-      console.log(`Remote branch ${localBranchName} does not exist.`);
-    }
+        // Pull the latest changes for the branch
+        await git.pull('origin', localBranchName);
+      } else {
+        console.log(`Remote branch ${localBranchName} does not exist.`);
+      }
     } catch (err) {
       if (err instanceof GitPluginError && err.plugin === 'timeout') {
-          console.log('Timeout error occurred while checking if remote branch exists for', baseDir);
+        console.log('Timeout error occurred while checking if remote branch exists for', baseDir);
       }
     }
 
-    
+
   }
 
   console.log('All remote branches have been pulled.');
 }
 
-async function initWakaTime () {
+async function initWakaTime() {
   if (wakaTime) return wakaTime;
 
   const configLocation = `${homedir()}/.wakatime.cfg`;
@@ -259,10 +266,10 @@ async function initWakaTime () {
 
     return wakaTime;
   }
-  
+
 }
 
-async function getCumTimeForProject (project: string, after: string, until: string) {
+async function getCumTimeForProject(project: string, after: string, until: string) {
   const wakaTime = await initWakaTime();
   const projectSummary = await wakaTime.getSummaries({ start: after, end: until, project });
   return projectSummary.cumulative_total.text;
