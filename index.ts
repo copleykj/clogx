@@ -73,8 +73,9 @@ if (options && options.month) {
   // const prevMonthOptions = monthMap[monthOptions.prev];
 
   // const after = `${year}-${prevMonthOptions.num}-${prevMonthOptions.days}`;
-  const until = format(lastDayOfMonth(`${year}-${monthOptions.num}-01`), 'yyyy-MM-dd');
-  const after = format(lastDayOfMonth(subMonths(until, 1)), 'yyyy-MM-dd');
+  const targetDate = new Date(Number(year), Number(monthOptions.num) - 1, 1);
+  const until = format(lastDayOfMonth(targetDate), 'yyyy-MM-dd');
+  const after = format(lastDayOfMonth(subMonths(targetDate, 1)), 'yyyy-MM-dd');
 
   const cwd = process.cwd();
   const files = await readdir(cwd, { withFileTypes: true });
