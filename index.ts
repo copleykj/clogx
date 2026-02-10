@@ -158,7 +158,7 @@ if (options && options.month) {
           new Paragraph({
             children: [
               new TextRun({
-                text: 'Commit Log',
+                text: `${format(targetDate, 'MMMM')} Commit Log`,
                 bold: true,
               }),
             ],
@@ -166,6 +166,17 @@ if (options && options.month) {
             alignment: AlignmentType.CENTER,
           }),
           ...projectLogs.flat().filter(Boolean),
+          new Paragraph({
+            children: [
+              new TextRun({ break: 1 }),
+              new TextRun({
+                text: `Generated on ${format(new Date(), 'MMMM do, yyyy')} using ClogX`,
+                italics: true,
+                color: '888888',
+              }),
+            ],
+            alignment: AlignmentType.CENTER,
+          }),
         ],
       },
     ],
